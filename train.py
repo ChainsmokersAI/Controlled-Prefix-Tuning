@@ -12,12 +12,12 @@ from torch.utils.tensorboard import SummaryWriter
 
 from transformers import AdamW, get_linear_schedule_with_warmup
 
-from utils_data import DatasetControlPrefixes, DatasetPrefixTuning, collate_fn_control_prefixes, collate_fn_prefix_tuning, load_config_for_control_prefixes
-from models import load_pretrained, PrefixTuning, ControlPrefixes
+from utils_data import DatasetAttrAlgn, DatasetControlPrefixes, DatasetPrefixTuning, collate_fn_attr_algn, collate_fn_control_prefixes, collate_fn_prefix_tuning, load_config_for_control_prefixes
+from models import load_pretrained, AttrAlgnA, ControlPrefixes, PrefixTuning
 
 parser=argparse.ArgumentParser(description='Controlled Generation using Prompt Learning')
 parser.add_argument('--dataset', type=str, required=True, help='Dataset Path')
-parser.add_argument('--model', type=str, required=True, help='Model: attr-algn | prefix-tuning | control-prefixes')
+parser.add_argument('--model', type=str, required=True, help='Model: attr-algn | control-prefixes | prefix-tuning')
 parser.add_argument('--base', type=str, required=True, help='Base (Pre-Trained) LM: gpt2-large etc')
 parser.add_argument('--device', type=str, default='gpu', help='Device where Model Trained on: gpu(default) | cpu')
 parser.add_argument('--ddp', type=str, default='False', help='Multi-GPU Setting: True | False(default)')
@@ -25,8 +25,10 @@ parser.add_argument('--batch', type=int, default=4, help='Batch Size')
 parser.add_argument('--accum', type=int, default=32, help='Accumulation Steps')
 parser.add_argument('--lr', type=float, default=5e-5, help='Learning Rate')
 parser.add_argument('--epoch', type=int, default=5, help='Epochs')
-parser.add_argument('--preseqlen', type=int, default=5, help='Prefix Sequence Length (for Prefix-Tuning, Control-Prefixes)')
-parser.add_argument('--hidden', type=int, default=512, help='Hidden Dimension Size (for Prefix-Tuning, Control-Prefixes)')
+parser.add_argument('--hidden', type=int, default=512, help='Hidden Dimension Size')
+parser.add_argument('--preseqlen', type=int, default=5, help='Prefix Sequence Length for Prefix-Tuning, Control-Prefixes: 5(default)')
+parser.add_argument('--method', type=str, default='A', help='Method of Attribute-Alignment: A(default) | AC')
+parser.add_argument('--domain', type=str, default='domain', help='Corpus Domain for Attribute-Alignment (AC)')
 #parser.add_argument('', type=, default=, help=)
 args=parser.parse_args()
 
@@ -209,6 +211,101 @@ def train_ddp_prefix_tuning(rank, world_size):
         # Save Model
         model_ddp.to(torch.device('cpu'))
         torch.save(model_ddp.module, f'./model/Prefix-Tuning_preseqlen{args.preseqlen}_hidden{args.hidden}_batch{args.batch*args.accum*world_size}_lr{args.lr}_epoch{args.epoch}.pt')
+
+def train_attr_algn(device):
+    """
+    """
+    print('\n***** Attribute-Alignment *****')
+    print('Method:', args.method)
+    if args.method!='A':
+        print('Corpus Domain:', args.domain)
+    print('Batch Size:', args.batch*args.accum)
+    print('Learning Rate:', args.lr)
+    print('Epochs:', args.epoch)
+    print('Device:', device)
+    print('*************************\n')
+
+    # Load Pre-Trained Tokenizer, LM
+    tokenizer, pretrained=load_pretrained(args.base)
+    pretrained=pretrained.to(device)
+
+    # Load Dataset
+    dataset=DatasetAttrAlgn(path_data=args.dataset,tokenizer=tokenizer)
+    # Collate Function: Padding for Same Sequence Length on Same Batch
+    if args.method=='A':
+        collate_fn=collate_fn_attr_algn(pad_token_id=tokenizer.pad_token_id)
+    elif args.method=='AC':
+        collate_fn=collate_fn_attr_algn(pad_token_id=tokenizer.pad_token_id, domain=tokenizer.encode(args.domain))
+    # DataLoader
+    dataloader=DataLoader(dataset, batch_size=args.batch, shuffle=True, collate_fn=collate_fn)
+
+    # Load Model
+    if args.method=='A':
+        model=AttrAlgnA(base_config=pretrained.config, hidden_dim=args.hidden)
+    elif args.method=='AC':
+        # Codes (To Be Continued..)
+        return
+    
+    # Optim, Scheduler
+    optimizer=AdamW(model.parameters(), lr=args.lr)
+    scheduler=get_linear_schedule_with_warmup(
+        optimizer=optimizer,
+        # 3% of Total Steps
+        num_warmup_steps=int(0.03*args.epoch*len(dataset)/(args.accum*args.batch)),
+        num_training_steps=int(args.epoch*len(dataset)/(args.accum*args.batch))
+    )
+
+    # TensorBoard: Logging
+    writer=SummaryWriter()
+    step_global=0
+
+    # Training
+    for epoch in range(args.epoch):
+        # Train Phase
+        model.train()
+        model.to(device)
+
+        loss_train=0
+        optimizer.zero_grad()
+
+        for step, (data, label, attr, domain) in enumerate(dataloader):
+            data=data.to(device)
+            label=label.to(device)
+            attr=attr.to(device)
+
+            # Attribute(s) Representation from Base (Pre-Trained) LM
+            encoded=pretrained(input_ids=attr, use_cache=True)['past_key_values']
+            # Transform Attribute(s) Representation via Alignment Function
+            past_key_values=model(input_key_values=encoded)
+
+            # Forward: Base (Pre-Trained) LM
+            outputs=pretrained(input_ids=data, labels=label, past_key_values=past_key_values)
+            
+            loss=outputs[0]/args.accum
+            loss.backward()
+            loss_train+=loss.item()
+            
+            if (step+1)%args.accum==0:
+                step_global+=1
+                
+                # TensorBoard
+                writer.add_scalar(
+                    f'loss_train/Attribute-Alignment({args.method})_hidden{args.hidden}_batch{args.batch*args.accum}_lr{args.lr}_epoch{args.epoch}',
+                    loss_train,
+                    step_global
+                )
+
+                # Set Loss to 0
+                loss_train=0
+
+                optimizer.step()
+                scheduler.step()
+                
+                optimizer.zero_grad()
+                
+        # Save Model
+        model.to(torch.device('cpu'))
+        torch.save(model, f'./model/Attribute-Alignment({args.method})_hidden{args.hidden}_batch{args.batch*args.accum}_lr{args.lr}_epoch{epoch+1}of{args.epoch}.pt')
 
 def train_control_prefixes(device):
     """
@@ -399,6 +496,8 @@ def main():
         train_prefix_tuning(device=device)
     elif args.model=='control-prefixes':
         train_control_prefixes(device=device)
+    elif args.model=='attr-algn':
+        train_attr_algn(device=device)
     else:
         print('Wrong Model Name!')
 

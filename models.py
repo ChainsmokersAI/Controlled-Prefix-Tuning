@@ -24,6 +24,51 @@ def load_pretrained(model_name):
 
     return tokenizer, pretrained
 
+class AttrAlgnA(nn.Module):
+    """
+    """
+    def __init__(self, base_config, hidden_dim=512):
+        super().__init__()
+
+        # Config of Base (Pre-Trained) LM
+        self.base_config=base_config
+
+        # Alignment Function
+        self.algn_func=nn.Sequential(
+            nn.Linear(2*base_config.n_layer*base_config.n_embd,hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim,2*base_config.n_layer*base_config.n_embd)
+        )
+
+    def forward(self, input_key_values):
+        # Batch Size
+        b_sz=input_key_values[0][0].shape[0]
+        # Sequence Length
+        seq_len=input_key_values[0][0].shape[2]
+        
+        hiddens=[]
+        for key, value in input_key_values:
+            hiddens.append(key)
+            hiddens.append(value)
+            
+        # 2*n_layer, batch_size, n_head, seq_len, n_embd/n_head
+        hiddens=torch.stack(hiddens)
+        # batch_size, seq_len, 2*n_layer, n_head, n_embd/n_head
+        hiddens=hiddens.permute(1,3,0,2,4)
+        # batch_size, seq_len, 2*n_layer*n_embd
+        hiddens=hiddens.reshape(b_sz,seq_len,2*self.base_config.n_layer*self.base_config.n_embd)
+        
+        hiddens=self.algn_func(hiddens)
+        
+        # batch_size, seq_len, 2*n_layer, n_head, n_embd/n_head
+        hiddens=hiddens.reshape(b_sz,seq_len,2*self.base_config.n_layer,self.base_config.n_head,int(self.base_config.n_embd/self.base_config.n_head))
+        # 2*n_layer, batch_size, n_head, seq_len, n_embd/n_head
+        hiddens=hiddens.permute(2,0,3,1,4)
+        
+        output_key_values=[(hidden[0], hidden[1]) for hidden in hiddens.chunk(self.base_config.n_layer)]
+        
+        return output_key_values
+
 class ControlPrefixes(nn.Module):
     """
     """
