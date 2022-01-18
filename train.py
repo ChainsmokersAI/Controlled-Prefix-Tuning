@@ -1,6 +1,4 @@
 import argparse
-from distutils.command.config import config
-import pandas as pd
 
 import torch
 import torch.distributed as dist
@@ -13,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from transformers import AdamW, get_linear_schedule_with_warmup
 
 from utils_data import DatasetAttrAlgn, DatasetControlPrefixes, DatasetPrefixTuning, collate_fn_attr_algn, collate_fn_control_prefixes, collate_fn_prefix_tuning, load_config_for_control_prefixes
-from models import load_pretrained, AttrAlgnA, ControlPrefixes, PrefixTuning
+from models import load_pretrained, AttrAlgnAC, AttrAlgnA, ControlPrefixes, PrefixTuning
 
 parser=argparse.ArgumentParser(description='Controlled Generation using Prompt Learning')
 parser.add_argument('--dataset', type=str, required=True, help='Dataset Path')
@@ -28,9 +26,119 @@ parser.add_argument('--epoch', type=int, default=5, help='Epochs')
 parser.add_argument('--hidden', type=int, default=512, help='Hidden Dimension Size')
 parser.add_argument('--preseqlen', type=int, default=5, help='Prefix Sequence Length for Prefix-Tuning, Control-Prefixes: 5(default)')
 parser.add_argument('--method', type=str, default='A', help='Method of Attribute-Alignment: A(default) | AC')
-parser.add_argument('--domain', type=str, default='domain', help='Corpus Domain for Attribute-Alignment (AC)')
+parser.add_argument('--domain', type=str, default='교육', help='Corpus Domain for Attribute-Alignment (AC)')
 #parser.add_argument('', type=, default=, help=)
 args=parser.parse_args()
+
+def train_ddp_attr_algn(rank, world_size):
+    """
+    """
+    if rank==0:
+        print('\n***** Attribute-Alignment *****')
+        print('Method:', args.method)
+        if args.method!='A':
+            print('Corpus Domain:', args.domain)
+        print('Batch Size:', args.batch*args.accum*world_size)
+        print('Learning Rate:', args.lr)
+        print('Epochs:', args.epoch)
+        print('Number of GPUs:', world_size)
+        print('*************************\n')
+
+    # Create Default Process Group
+    dist.init_process_group(backend='nccl', init_method='tcp://127.0.0.1:8973', rank=rank, world_size=world_size)
+    
+    # Load Pre-Trained Tokenizer, LM
+    tokenizer, pretrained=load_pretrained(args.base)
+    pretrained=pretrained.to(rank)
+
+    # Load Dataset
+    dataset=DatasetAttrAlgn(path_data=args.dataset,tokenizer=tokenizer)
+    sampler=DistributedSampler(dataset)
+    # Collate Function: Padding for Same Sequence Length on Same Batch
+    if args.method=='A':
+        collate_fn=collate_fn_attr_algn(pad_token_id=tokenizer.pad_token_id)
+    elif args.method=='AC':
+        collate_fn=collate_fn_attr_algn(pad_token_id=tokenizer.pad_token_id, domain=tokenizer.encode(args.domain))
+    # DataLoader
+    dataloader=DataLoader(dataset, batch_size=args.batch, shuffle=False, collate_fn=collate_fn, sampler=sampler)
+    
+    # Load Model (on Device)
+    if args.method=='A':
+        model=AttrAlgnA(base_config=pretrained.config, hidden_dim=args.hidden)
+    elif args.method=='AC':
+        model=AttrAlgnAC(base_config=pretrained.config, hidden_dim=args.hidden)
+    model=model.to(rank)
+    model_ddp=DDP(model, device_ids=[rank])
+        
+    # Optim, Scheduler
+    optimizer=AdamW(model_ddp.parameters(), lr=args.lr)
+    scheduler=get_linear_schedule_with_warmup(
+        optimizer=optimizer,
+        # 3% of Total Steps
+        num_warmup_steps=int(0.03*args.epoch*len(dataset)/(world_size*args.accum*args.batch)),
+        num_training_steps=int(args.epoch*len(dataset)/(world_size*args.accum*args.batch))
+    )
+
+    # TensorBoard: Logging
+    writer=SummaryWriter()
+    step_global=0
+
+    # Training
+    for epoch in range(args.epoch):
+        # Train Phase
+        model_ddp.train()
+        sampler.set_epoch(epoch)
+
+        loss_train=0
+        optimizer.zero_grad()
+
+        for step, (data, label, attr, domain) in enumerate(dataloader):
+            data=data.to(rank)
+            label=label.to(rank)
+            attr=attr.to(rank)
+
+            # Attribute(s) Representation from Base (Pre-Trained) LM
+            encoded_attr=pretrained(input_ids=attr, use_cache=True)['past_key_values']
+
+            if args.method=='A':
+                # Transform Attribute(s) Representation via Alignment Function
+                past_key_values=model_ddp(input_key_values=encoded_attr)
+            elif args.method=='AC':
+                # Corpus Domain Representation from Base (Pre-Trained) LM
+                encoded_domain=pretrained(input_ids=domain.to(rank), use_cache=True)['past_key_values']
+                # Transform Attribute(s) Representation via Alignment Function
+                past_key_values=model_ddp(domain_key_values=encoded_domain, attr_key_values=encoded_attr)
+
+            # Forward: Base (Pre-Trained) LM
+            outputs=pretrained(input_ids=data, labels=label, past_key_values=past_key_values)
+            
+            loss=outputs[0]/args.accum
+            loss.backward()
+            loss_train+=loss.item()
+            
+            if (step+1)%args.accum==0:
+                step_global+=1
+                
+                if rank==0:
+                    # TensorBoard
+                    writer.add_scalar(
+                        f'loss_train/Attribute-Alignment({args.method})_hidden{args.hidden}_batch{args.batch*args.accum*world_size}_lr{args.lr}_epoch{args.epoch}',
+                        loss_train,
+                        step_global
+                    )
+
+                # Set Loss to 0
+                loss_train=0
+
+                optimizer.step()
+                scheduler.step()
+                
+                optimizer.zero_grad()
+                
+    if rank==0:
+        # Save Model
+        model_ddp.to(torch.device('cpu'))
+        torch.save(model_ddp.module, f'./model/Attribute-Alignment({args.method})_hidden{args.hidden}_batch{args.batch*args.accum*world_size}_lr{args.lr}_epoch{args.epoch}.pt')
 
 def train_ddp_control_prefixes(rank, world_size):
     """
@@ -82,6 +190,7 @@ def train_ddp_control_prefixes(rank, world_size):
     for epoch in range(args.epoch):
         # Train Phase
         model_ddp.train()
+        sampler.set_epoch(epoch)
 
         loss_train=0
         optimizer.zero_grad()
@@ -171,6 +280,7 @@ def train_ddp_prefix_tuning(rank, world_size):
     for epoch in range(args.epoch):
         # Train Phase
         model_ddp.train()
+        sampler.set_epoch(epoch)
 
         loss_train=0
         optimizer.zero_grad()
@@ -243,8 +353,7 @@ def train_attr_algn(device):
     if args.method=='A':
         model=AttrAlgnA(base_config=pretrained.config, hidden_dim=args.hidden)
     elif args.method=='AC':
-        # Codes (To Be Continued..)
-        return
+        model=AttrAlgnAC(base_config=pretrained.config, hidden_dim=args.hidden)
     
     # Optim, Scheduler
     optimizer=AdamW(model.parameters(), lr=args.lr)
@@ -274,9 +383,16 @@ def train_attr_algn(device):
             attr=attr.to(device)
 
             # Attribute(s) Representation from Base (Pre-Trained) LM
-            encoded=pretrained(input_ids=attr, use_cache=True)['past_key_values']
-            # Transform Attribute(s) Representation via Alignment Function
-            past_key_values=model(input_key_values=encoded)
+            encoded_attr=pretrained(input_ids=attr, use_cache=True)['past_key_values']
+
+            if args.method=='A':
+                # Transform Attribute(s) Representation via Alignment Function
+                past_key_values=model(input_key_values=encoded_attr)
+            elif args.method=='AC':
+                # Corpus Domain Representation from Base (Pre-Trained) LM
+                encoded_domain=pretrained(input_ids=domain.to(device), use_cache=True)['past_key_values']
+                # Transform Attribute(s) Representation via Alignment Function
+                past_key_values=model(domain_key_values=encoded_domain, attr_key_values=encoded_attr)
 
             # Forward: Base (Pre-Trained) LM
             outputs=pretrained(input_ids=data, labels=label, past_key_values=past_key_values)
@@ -481,6 +597,8 @@ def main():
                 mp.spawn(train_ddp_prefix_tuning, args=(world_size,), nprocs=world_size, join=True)
             elif args.model=='control-prefixes':
                 mp.spawn(train_ddp_control_prefixes, args=(world_size,), nprocs=world_size, join=True)
+            elif args.model=='attr-algn':
+                mp.spawn(train_ddp_attr_algn, args=(world_size,), nprocs=world_size, join=True)
             else:
                 print('Wrong Model Name!')
 
