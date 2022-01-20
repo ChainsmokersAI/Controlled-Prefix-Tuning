@@ -26,7 +26,7 @@ parser.add_argument('--epoch', type=int, default=5, help='Epochs')
 parser.add_argument('--hidden', type=int, default=512, help='Hidden Dimension Size')
 parser.add_argument('--preseqlen', type=int, default=5, help='Prefix Sequence Length for Prefix-Tuning, Control-Prefixes: 5(default)')
 parser.add_argument('--method', type=str, default='A', help='Method of Attribute-Alignment: A(default) | AC')
-parser.add_argument('--domain', type=str, default='교육', help='Corpus Domain for Attribute-Alignment (AC)')
+parser.add_argument('--domain', type=str, default='domain', help='Corpus Domain for Attribute-Alignment (AC)')
 #parser.add_argument('', type=, default=, help=)
 args=parser.parse_args()
 

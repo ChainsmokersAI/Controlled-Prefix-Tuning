@@ -229,4 +229,3 @@ def collate_fn_prefix_tuning(pad_token_id):
         return torch.tensor(datas), torch.tensor(labels)
 
     return collate_fn
-
