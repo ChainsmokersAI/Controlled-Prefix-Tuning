@@ -1,6 +1,5 @@
 __pycache__/
 runs/
-dataset/
 model/
-generation/
 nohup.out
+
