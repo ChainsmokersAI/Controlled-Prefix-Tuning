@@ -32,6 +32,7 @@ args=parser.parse_args()
 
 def train_ddp_attr_algn(rank, world_size):
     """
+    Paper: Attribute Alignment: Controlling Text Generation from Pre-trained Language Models (https://arxiv.org/abs/2103.11070)
     """
     if rank==0:
         print('\n***** Attribute-Alignment *****')
@@ -41,8 +42,9 @@ def train_ddp_attr_algn(rank, world_size):
         print('Batch Size:', args.batch*args.accum*world_size)
         print('Learning Rate:', args.lr)
         print('Epochs:', args.epoch)
+        print('Hidden Dimension Size:', args.hidden)
         print('Number of GPUs:', world_size)
-        print('*************************\n')
+        print('******************************\n')
 
     # Create Default Process Group
     dist.init_process_group(backend='nccl', init_method='tcp://127.0.0.1:8973', rank=rank, world_size=world_size)
@@ -138,18 +140,21 @@ def train_ddp_attr_algn(rank, world_size):
     if rank==0:
         # Save Model
         model_ddp.to(torch.device('cpu'))
-        torch.save(model_ddp.module, f'./model/Attribute-Alignment({args.method})_hidden{args.hidden}_batch{args.batch*args.accum*world_size}_lr{args.lr}_epoch{args.epoch}.pt')
+        torch.save(model_ddp.module, f'./model/Attribute-Alignment({args.method})_DDP({world_size})_hidden{args.hidden}_batch{args.batch*args.accum*world_size}_lr{args.lr}_epoch{args.epoch}.pt')
 
 def train_ddp_control_prefixes(rank, world_size):
     """
+    Paper: Control Prefixes for Text Generation (https://arxiv.org/abs/2110.08329)
     """
     if rank==0:
         print('\n***** Control-Prefixes *****')
         print('Batch Size:', args.batch*args.accum*world_size)
         print('Learning Rate:', args.lr)
         print('Epochs:', args.epoch)
+        print('Prefix Sequence Length:', args.preseqlen)
+        print('Hidden Dimension Size:', args.hidden)
         print('Number of GPUs:', world_size)
-        print('*************************\n')
+        print('******************************\n')
 
     # Create Default Process Group
     dist.init_process_group(backend='nccl', init_method='tcp://127.0.0.1:8973', rank=rank, world_size=world_size)
@@ -230,18 +235,21 @@ def train_ddp_control_prefixes(rank, world_size):
     if rank==0:
         # Save Model
         model_ddp.to(torch.device('cpu'))
-        torch.save(model_ddp.module, f'./model/Control-Prefixes_preseqlen{args.preseqlen}_hidden{args.hidden}_batch{args.batch*args.accum*world_size}_lr{args.lr}_epoch{args.epoch}.pt')
+        torch.save(model_ddp.module, f'./model/Control-Prefixes_DDP({world_size})_preseqlen{args.preseqlen}_hidden{args.hidden}_batch{args.batch*args.accum*world_size}_lr{args.lr}_epoch{args.epoch}.pt')
 
 def train_ddp_prefix_tuning(rank, world_size):
     """
+    Paper: Prefix-Tuning: Optimizing Continuous Prompts for Generation (https://arxiv.org/abs/2101.00190)
     """
     if rank==0:
         print('\n***** Prefix-Tuning *****')
         print('Batch Size:', args.batch*args.accum*world_size)
         print('Learning Rate:', args.lr)
         print('Epochs:', args.epoch)
+        print('Prefix Sequence Length:', args.preseqlen)
+        print('Hidden Dimension Size:', args.hidden)
         print('Number of GPUs:', world_size)
-        print('*************************\n')
+        print('******************************\n')
 
     # Create Default Process Group
     dist.init_process_group(backend='nccl', init_method='tcp://127.0.0.1:8973', rank=rank, world_size=world_size)
@@ -320,10 +328,11 @@ def train_ddp_prefix_tuning(rank, world_size):
     if rank==0:
         # Save Model
         model_ddp.to(torch.device('cpu'))
-        torch.save(model_ddp.module, f'./model/Prefix-Tuning_preseqlen{args.preseqlen}_hidden{args.hidden}_batch{args.batch*args.accum*world_size}_lr{args.lr}_epoch{args.epoch}.pt')
+        torch.save(model_ddp.module, f'./model/Prefix-Tuning_DDP({world_size})_preseqlen{args.preseqlen}_hidden{args.hidden}_batch{args.batch*args.accum*world_size}_lr{args.lr}_epoch{args.epoch}.pt')
 
 def train_attr_algn(device):
     """
+    Paper: Attribute Alignment: Controlling Text Generation from Pre-trained Language Models (https://arxiv.org/abs/2103.11070)
     """
     print('\n***** Attribute-Alignment *****')
     print('Method:', args.method)
@@ -332,8 +341,9 @@ def train_attr_algn(device):
     print('Batch Size:', args.batch*args.accum)
     print('Learning Rate:', args.lr)
     print('Epochs:', args.epoch)
+    print('Hidden Dimension Size:', args.hidden)
     print('Device:', device)
-    print('*************************\n')
+    print('******************************\n')
 
     # Load Pre-Trained Tokenizer, LM
     tokenizer, pretrained=load_pretrained(args.base)
@@ -425,13 +435,16 @@ def train_attr_algn(device):
 
 def train_control_prefixes(device):
     """
+    Paper: Control Prefixes for Text Generation (https://arxiv.org/abs/2110.08329)
     """
     print('\n***** Control-Prefixes *****')
     print('Batch Size:', args.batch*args.accum)
     print('Learning Rate:', args.lr)
     print('Epochs:', args.epoch)
+    print('Prefix Sequence Length:', args.preseqlen)
+    print('Hidden Dimension Size:', args.hidden)
     print('Device:', device)
-    print('*************************\n')
+    print('******************************\n')
 
     # Load Pre-Trained Tokenizer, LM
     tokenizer, pretrained=load_pretrained(args.base)
@@ -508,13 +521,16 @@ def train_control_prefixes(device):
 
 def train_prefix_tuning(device):
     """
+    Paper: Prefix-Tuning: Optimizing Continuous Prompts for Generation (https://arxiv.org/abs/2101.00190)
     """
     print('\n***** Prefix-Tuning *****')
     print('Batch Size:', args.batch*args.accum)
     print('Learning Rate:', args.lr)
     print('Epochs:', args.epoch)
+    print('Prefix Sequence Length:', args.preseqlen)
+    print('Hidden Dimension Size:', args.hidden)
     print('Device:', device)
-    print('*************************\n')
+    print('******************************\n')
 
     # Load Pre-Trained Tokenizer, LM
     tokenizer, pretrained=load_pretrained(args.base)

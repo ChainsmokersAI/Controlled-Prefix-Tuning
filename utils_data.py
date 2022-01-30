@@ -152,6 +152,7 @@ class DatasetPrefixTuning(Dataset):
 
 def collate_fn_attr_algn(pad_token_id, domain=None):
     """
+    Return Domain Tensor when Training Methods with Corpus Domain Disentanglement
     """
     def collate_fn(batch):
         max_len=0

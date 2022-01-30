@@ -60,6 +60,11 @@ def load_model(device):
     tokenizer=AutoTokenizer.from_pretrained(base_config._name_or_path)
     pretrained=AutoModelForCausalLM.from_pretrained(base_config._name_or_path).to(device)
 
+    if tokenizer.pad_token==None:
+        # Add PAD Token: [PAD]
+        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        pretrained.resize_token_embeddings(len(tokenizer))
+
     # Bind Customized Generation Function To Base LM
     sys.path.append('./transformers/')
     from customized_generation_utils import generate, sample
@@ -71,6 +76,7 @@ def load_model(device):
 
 def do_generate(device):
     """
+    Generation Strategy: Nucleus Sampling
     """
     print('\n***** Controlled Generation *****')
     print('Model:', args.model)
@@ -82,7 +88,7 @@ def do_generate(device):
     print('Control Codes:', args.code)
     print('Prompt:', args.prompt)
     print('Device:', device)
-    print('******************************\n')
+    print('***********************************\n')
 
     # Load Base LM & Trained Model
     tokenizer, pretrained, model=load_model(device=device)

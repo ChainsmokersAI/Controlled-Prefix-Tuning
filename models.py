@@ -9,8 +9,12 @@ def load_pretrained(model_name):
     print('Loading Pre-Trained Tokenizer, LM..')
 
     tokenizer=AutoTokenizer.from_pretrained(model_name)
-
     pretrained=AutoModelForCausalLM.from_pretrained(model_name)
+
+    if tokenizer.pad_token==None:
+        # Add PAD Token: [PAD]
+        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        pretrained.resize_token_embeddings(len(tokenizer))
 
     # Freeze LM
     for param in pretrained.parameters():
@@ -25,6 +29,7 @@ def load_pretrained(model_name):
 
 class AttrAlgnAC(nn.Module):
     """
+    Attribute Representation with Corpus Representation Disentanglement (AC)
     """
     def __init__(self, base_config, hidden_dim=512):
         super().__init__()
@@ -96,6 +101,7 @@ class AttrAlgnAC(nn.Module):
 
 class AttrAlgnA(nn.Module):
     """
+    Attribute Representation without Corpus Representation Disentanglement (A)
     """
     def __init__(self, base_config, hidden_dim=512):
         super().__init__()
