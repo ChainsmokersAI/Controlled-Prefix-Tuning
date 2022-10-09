@@ -3,7 +3,7 @@ Prefix-Tuning is a method that prepends continuous *Trainable* prompts (called *
 
 <img src="https://user-images.githubusercontent.com/89329469/151740274-3b756d88-1fbc-4d71-8863-35befd8a143c.jpg" width="50%" height="50%">
 
-I have referred the following papers:
+I have referenced the following papers:
 * Prefix-Tuning: Optimizing Continuous Prompts for Generation ([Li and Liang](https://arxiv.org/abs/2101.00190), 2021)
 * Control Prefixes for Text Generation ([Clive et al.](https://arxiv.org/abs/2110.08329), 2021)
 * Attribute Alignment: Controlling Text Generation from Pre-trained Language Models ([Yu et al.](https://arxiv.org/abs/2103.11070), 2021)
